@@ -29,12 +29,15 @@ func toAccountDomain(value accountModel) account.Credential {
 	var lastRefreshError string
 	var refreshPermanent bool
 	var authType account.AuthType
-	var clientID, encryptedPrimary, encryptedRefresh string
+	var clientID, encryptedPrimary, encryptedRefresh, encryptedCloudflareCookie string
 	if value.Credential != nil {
 		authType = account.AuthType(value.Credential.AuthType)
 		clientID = value.Credential.ClientID
 		encryptedPrimary = value.Credential.EncryptedPrimary
 		encryptedRefresh = value.Credential.EncryptedRefresh
+		encryptedCloudflareCookie = value.Credential.EncryptedCloudflareCookie
+		// The account-level Cloudflare cookie is intentionally never exposed by
+		// the transport DTO; it is only used when constructing the upstream Cookie header.
 		if value.Credential.ExpiresAt != nil {
 			expiresAt = *value.Credential.ExpiresAt
 		}
@@ -50,21 +53,34 @@ func toAccountDomain(value accountModel) account.Credential {
 		webTier = account.WebTier(value.WebProfile.Tier)
 		webTierSyncedAt = value.WebProfile.SyncedAt
 	}
+	buildRouteMode := account.BuildRouteMode(value.BuildRouteMode)
+	if account.Provider(value.Provider) != account.ProviderBuild || !buildRouteMode.IsValid() {
+		buildRouteMode = account.BuildRouteAuto
+	}
 	return account.Credential{
 		ID: value.ID, Provider: account.Provider(value.Provider), AuthType: authType, Name: value.Name, Email: value.Email,
 		UserID: value.UserID, TeamID: value.TeamID, SourceKey: value.SourceKey, OIDCClientID: clientID,
-		EncryptedAccessToken: encryptedPrimary, EncryptedRefreshToken: encryptedRefresh,
+		EncryptedAccessToken: encryptedPrimary, EncryptedRefreshToken: encryptedRefresh, EncryptedCloudflareCookie: encryptedCloudflareCookie,
 		ExpiresAt: expiresAt, RefreshDueAt: refreshDueAt, LastRefreshAt: lastRefreshAt,
 		RefreshFailureCount: refreshFailures, LastRefreshErrorCode: lastRefreshError, RefreshPermanent: refreshPermanent,
 		Enabled: value.Enabled, AuthStatus: account.AuthStatus(value.AuthStatus), Priority: value.Priority,
 		MaxConcurrent: value.MaxConcurrent, MinimumRemaining: value.MinimumRemaining, FailureCount: value.FailureCount,
 		CooldownUntil: value.CooldownUntil, LastError: value.LastError, LastUsedAt: value.LastUsedAt,
 		ObservedModel: value.ObservedModel, ObservedModelAt: value.ObservedModelAt, WebTier: webTier, WebTierSyncedAt: webTierSyncedAt,
-		CreatedAt: value.CreatedAt, UpdatedAt: value.UpdatedAt,
+		BuildAPIFallback: value.BuildAPIFallback, BuildRouteMode: buildRouteMode,
+		BuildSuperEntitled: value.BuildSuperEntitled && account.Provider(value.Provider) == account.ProviderBuild,
+		CreatedAt:          value.CreatedAt, UpdatedAt: value.UpdatedAt,
 	}
 }
 
 func fromAccountDomain(value account.Credential) accountModel {
+	// entitlement、推理地址与 XAI 回退标记仅对 grok_build 有意义。
+	buildAPIFallback := value.BuildAPIFallback && value.Provider == account.ProviderBuild
+	buildSuperEntitled := value.BuildSuperEntitled && value.Provider == account.ProviderBuild
+	buildRouteMode := account.BuildRouteAuto
+	if value.Provider == account.ProviderBuild && value.BuildRouteMode.IsValid() {
+		buildRouteMode = value.BuildRouteMode
+	}
 	return accountModel{
 		ID: value.ID, IdentityKey: accountIdentity(value), Provider: string(value.Provider), Name: value.Name, Email: value.Email,
 		UserID: value.UserID, TeamID: value.TeamID, SourceKey: value.SourceKey,
@@ -72,6 +88,7 @@ func fromAccountDomain(value account.Credential) accountModel {
 		MaxConcurrent: value.MaxConcurrent, MinimumRemaining: value.MinimumRemaining, FailureCount: value.FailureCount,
 		CooldownUntil: value.CooldownUntil, LastError: value.LastError, LastUsedAt: value.LastUsedAt,
 		ObservedModel: value.ObservedModel, ObservedModelAt: value.ObservedModelAt,
+		BuildAPIFallback: buildAPIFallback, BuildRouteMode: string(buildRouteMode), BuildSuperEntitled: buildSuperEntitled,
 		CreatedAt: value.CreatedAt, UpdatedAt: value.UpdatedAt,
 	}
 }
@@ -98,7 +115,8 @@ func fromAccountCredentialDomain(value account.Credential) accountCredentialMode
 	return accountCredentialModel{
 		AccountID: value.ID, AuthType: string(authType), ClientID: value.OIDCClientID,
 		EncryptedPrimary: value.EncryptedAccessToken, EncryptedRefresh: value.EncryptedRefreshToken,
-		ExpiresAt: expiresAt, RefreshDueAt: refreshDueAt, LastRefreshAt: value.LastRefreshAt,
+		EncryptedCloudflareCookie: value.EncryptedCloudflareCookie,
+		ExpiresAt:                 expiresAt, RefreshDueAt: refreshDueAt, LastRefreshAt: value.LastRefreshAt,
 		RefreshFailures: value.RefreshFailureCount, LastRefreshError: value.LastRefreshErrorCode, RefreshPermanent: value.RefreshPermanent,
 		UpdatedAt: time.Now().UTC(),
 	}
@@ -133,7 +151,7 @@ func accountIdentity(value account.Credential) string {
 func toBillingDomain(value billingModel) account.Billing {
 	var history []account.BillingHistoryEntry
 	_ = json.Unmarshal([]byte(value.HistoryJSON), &history)
-	return account.Billing{AccountID: value.AccountID, PlanCode: value.PlanCode, PlanName: value.PlanName, MonthlyLimit: value.MonthlyLimit, Used: value.Used, OnDemandCap: value.OnDemandCap, OnDemandUsed: value.OnDemandUsed, PrepaidBalance: value.PrepaidBalance, CreditUsagePercent: value.CreditUsagePercent, IsUnifiedBillingUser: value.IsUnifiedBillingUser, TopUpMethod: value.TopUpMethod, UsagePeriodType: value.UsagePeriodType, UsagePeriodStart: value.UsagePeriodStart, UsagePeriodEnd: value.UsagePeriodEnd, BillingPeriodStart: value.BillingPeriodStart, BillingPeriodEnd: value.BillingPeriodEnd, History: history, SyncedAt: value.SyncedAt}
+	return account.Billing{AccountID: value.AccountID, PlanCode: value.PlanCode, PlanName: value.PlanName, MonthlyLimit: value.MonthlyLimit, Used: value.Used, OnDemandCap: value.OnDemandCap, OnDemandUsed: value.OnDemandUsed, PrepaidBalance: value.PrepaidBalance, CreditUsagePercent: value.CreditUsagePercent, IsUnifiedBillingUser: value.IsUnifiedBillingUser, OnDemandEnabled: value.OnDemandEnabled, TopUpMethod: value.TopUpMethod, UsagePeriodType: value.UsagePeriodType, UsagePeriodStart: value.UsagePeriodStart, UsagePeriodEnd: value.UsagePeriodEnd, BillingPeriodStart: value.BillingPeriodStart, BillingPeriodEnd: value.BillingPeriodEnd, History: history, SyncedAt: value.SyncedAt}
 }
 
 func toModelDomain(value modelRouteModel) model.Route {

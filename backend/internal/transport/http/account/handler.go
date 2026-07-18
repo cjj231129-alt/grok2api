@@ -29,6 +29,10 @@ type accountSyncProgressor interface {
 	SyncStreamObserved(ctx context.Context, accountIDs <-chan uint64, observer func(completed, total int)) accountsyncapp.Result
 }
 
+type accountModelSynchronizer interface {
+	SyncModels(ctx context.Context, accountID uint64) error
+}
+
 const (
 	maxAccountImportBytes         = 30 << 20
 	maxAccountImportFiles         = 1000
@@ -153,11 +157,15 @@ func (h *Handler) Register(router *gin.RouterGroup) {
 }
 
 type updateRequest struct {
-	Name             *string  `json:"name"`
-	Enabled          *bool    `json:"enabled"`
-	Priority         *int     `json:"priority"`
-	MaxConcurrent    *int     `json:"maxConcurrent"`
-	MinimumRemaining *float64 `json:"minimumRemaining"`
+	Name                   *string                       `json:"name"`
+	Enabled                *bool                         `json:"enabled"`
+	Priority               *int                          `json:"priority"`
+	MaxConcurrent          *int                          `json:"maxConcurrent"`
+	MinimumRemaining       *float64                      `json:"minimumRemaining"`
+	CloudflareCookies      *string                       `json:"cloudflareCookies"`
+	ClearCloudflareCookies bool                          `json:"clearCloudflareCookies"`
+	BuildSuperEntitled     *bool                         `json:"buildSuperEntitled"`
+	BuildRouteMode         *accountdomain.BuildRouteMode `json:"buildRouteMode"`
 }
 
 type batchUpdateRequest struct {
@@ -221,39 +229,44 @@ type accountImportResponse struct {
 }
 
 type accountResponse struct {
-	ID               uint64                `json:"id,string"`
-	Provider         string                `json:"provider"`
-	AuthType         string                `json:"authType"`
-	WebTier          string                `json:"webTier,omitempty"`
-	WebTierSyncedAt  *time.Time            `json:"webTierSyncedAt,omitempty"`
-	Name             string                `json:"name"`
-	Email            string                `json:"email,omitempty"`
-	UserID           string                `json:"userId,omitempty"`
-	TeamID           string                `json:"teamId,omitempty"`
-	Enabled          bool                  `json:"enabled"`
-	AuthStatus       string                `json:"authStatus"`
-	ExpiresAt        *time.Time            `json:"expiresAt,omitempty"`
-	Refreshable      bool                  `json:"refreshable"`
-	RefreshDueAt     *time.Time            `json:"refreshDueAt,omitempty"`
-	LastRefreshAt    *time.Time            `json:"lastRefreshAt,omitempty"`
-	RefreshFailures  int                   `json:"refreshFailureCount"`
-	LastRefreshError string                `json:"lastRefreshErrorCode,omitempty"`
-	Priority         int                   `json:"priority"`
-	MaxConcurrent    int                   `json:"maxConcurrent"`
-	MinimumRemaining float64               `json:"minimumRemaining"`
-	FailureCount     int                   `json:"failureCount"`
-	CooldownUntil    *time.Time            `json:"cooldownUntil,omitempty"`
-	LastError        string                `json:"lastError,omitempty"`
-	LastUsedAt       *time.Time            `json:"lastUsedAt,omitempty"`
-	LinkedAccountID  uint64                `json:"linkedAccountId,omitempty,string"`
-	LinkedName       string                `json:"linkedAccountName,omitempty"`
-	LinkedProvider   string                `json:"linkedProvider,omitempty"`
-	CreatedAt        time.Time             `json:"createdAt"`
-	ObservedModel    string                `json:"observedModel,omitempty"`
-	ObservedModelAt  *time.Time            `json:"observedModelAt,omitempty"`
-	Billing          *billingResponse      `json:"billing,omitempty"`
-	Quota            quotaResponse         `json:"quota"`
-	QuotaWindows     []quotaWindowResponse `json:"quotaWindows,omitempty"`
+	ID                         uint64                `json:"id,string"`
+	Provider                   string                `json:"provider"`
+	AuthType                   string                `json:"authType"`
+	WebTier                    string                `json:"webTier,omitempty"`
+	WebTierSyncedAt            *time.Time            `json:"webTierSyncedAt,omitempty"`
+	Name                       string                `json:"name"`
+	Email                      string                `json:"email,omitempty"`
+	UserID                     string                `json:"userId,omitempty"`
+	TeamID                     string                `json:"teamId,omitempty"`
+	Enabled                    bool                  `json:"enabled"`
+	AuthStatus                 string                `json:"authStatus"`
+	ExpiresAt                  *time.Time            `json:"expiresAt,omitempty"`
+	Refreshable                bool                  `json:"refreshable"`
+	RefreshDueAt               *time.Time            `json:"refreshDueAt,omitempty"`
+	LastRefreshAt              *time.Time            `json:"lastRefreshAt,omitempty"`
+	RefreshFailures            int                   `json:"refreshFailureCount"`
+	LastRefreshError           string                `json:"lastRefreshErrorCode,omitempty"`
+	Priority                   int                   `json:"priority"`
+	MaxConcurrent              int                   `json:"maxConcurrent"`
+	MinimumRemaining           float64               `json:"minimumRemaining"`
+	FailureCount               int                   `json:"failureCount"`
+	CooldownUntil              *time.Time            `json:"cooldownUntil,omitempty"`
+	LastError                  string                `json:"lastError,omitempty"`
+	LastUsedAt                 *time.Time            `json:"lastUsedAt,omitempty"`
+	LinkedAccountID            uint64                `json:"linkedAccountId,omitempty,string"`
+	LinkedName                 string                `json:"linkedAccountName,omitempty"`
+	LinkedProvider             string                `json:"linkedProvider,omitempty"`
+	CreatedAt                  time.Time             `json:"createdAt"`
+	ObservedModel              string                `json:"observedModel,omitempty"`
+	ObservedModelAt            *time.Time            `json:"observedModelAt,omitempty"`
+	CloudflareCookieConfigured bool                  `json:"cloudflareCookieConfigured"`
+	BuildSuperEntitled         bool                  `json:"buildSuperEntitled"`
+	BuildRouteMode             string                `json:"buildRouteMode"`
+	BuildBotFlagged            bool                  `json:"buildBotFlagged"`
+	ModelSyncFailed            bool                  `json:"modelSyncFailed,omitempty"`
+	Billing                    *billingResponse      `json:"billing,omitempty"`
+	Quota                      quotaResponse         `json:"quota"`
+	QuotaWindows               []quotaWindowResponse `json:"quotaWindows,omitempty"`
 }
 
 type quotaWindowResponse struct {
@@ -284,6 +297,7 @@ type billingResponse struct {
 	PrepaidBalance       float64                  `json:"prepaidBalance"`
 	CreditUsagePercent   float64                  `json:"creditUsagePercent"`
 	IsUnifiedBillingUser bool                     `json:"isUnifiedBillingUser"`
+	OnDemandEnabled      *bool                    `json:"onDemandEnabled,omitempty"`
 	TopUpMethod          string                   `json:"topUpMethod,omitempty"`
 	UsagePeriodType      string                   `json:"usagePeriodType,omitempty"`
 	UsagePeriodStart     string                   `json:"usagePeriodStart,omitempty"`
@@ -297,6 +311,9 @@ type billingResponse struct {
 type billingHistoryResponse struct {
 	Year         int     `json:"year"`
 	Month        int     `json:"month"`
+	PeriodType   string  `json:"periodType,omitempty"`
+	PeriodStart  string  `json:"periodStart,omitempty"`
+	PeriodEnd    string  `json:"periodEnd,omitempty"`
 	IncludedUsed float64 `json:"includedUsed"`
 	OnDemandUsed float64 `json:"onDemandUsed"`
 	TotalUsed    float64 `json:"totalUsed"`
@@ -325,7 +342,7 @@ type quotaResponse struct {
 
 func (h *Handler) list(c *gin.Context) {
 	page, pageSize := pagination(c)
-	values, total, err := h.service.List(c.Request.Context(), page, pageSize, c.Query("search"), accountapp.ListFilter{Provider: c.Query("provider"), QuotaType: c.Query("type"), Status: c.Query("status"), Renewal: c.Query("renewal"), Sort: repository.SortQuery{Field: c.Query("sortBy"), Direction: repository.SortDirection(c.Query("sortOrder"))}})
+	values, total, err := h.service.List(c.Request.Context(), page, pageSize, c.Query("search"), accountapp.ListFilter{Provider: c.Query("provider"), QuotaType: c.Query("type"), Status: c.Query("status"), Renewal: c.Query("renewal"), Risk: c.Query("risk"), Sort: repository.SortQuery{Field: c.Query("sortBy"), Direction: repository.SortDirection(c.Query("sortOrder"))}})
 	if errors.Is(err, accountapp.ErrInvalidFilter) {
 		response.Error(c, http.StatusBadRequest, "invalidFilter", err.Error())
 		return
@@ -351,7 +368,7 @@ func (h *Handler) summary(c *gin.Context) {
 	web := value.Providers[string(accountdomain.ProviderWeb)]
 	console := value.Providers[string(accountdomain.ProviderConsole)]
 	response.Success(c, http.StatusOK, gin.H{
-		"total": value.Total, "available": value.Available, "recovering": value.Recovering, "attention": value.Attention,
+		"total": value.Total, "available": value.Available, "recovering": value.Recovering, "attention": value.Attention, "risk": value.Risk,
 		"providers": gin.H{
 			string(accountdomain.ProviderBuild):   gin.H{"total": build.Total, "available": build.Available},
 			string(accountdomain.ProviderWeb):     gin.H{"total": web.Total, "available": web.Available},
@@ -893,12 +910,23 @@ func (h *Handler) update(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, "invalidRequest", "请求参数无效")
 		return
 	}
-	value, err := h.service.Update(c.Request.Context(), id, accountapp.UpdateInput{Name: request.Name, Enabled: request.Enabled, Priority: request.Priority, MaxConcurrent: request.MaxConcurrent, MinimumRemaining: request.MinimumRemaining})
+	value, err := h.service.Update(c.Request.Context(), id, accountapp.UpdateInput{
+		Name: request.Name, Enabled: request.Enabled, Priority: request.Priority,
+		MaxConcurrent: request.MaxConcurrent, MinimumRemaining: request.MinimumRemaining,
+		CloudflareCookies: request.CloudflareCookies, ClearCloudflareCookies: request.ClearCloudflareCookies,
+		BuildSuperEntitled: request.BuildSuperEntitled, BuildRouteMode: request.BuildRouteMode,
+	})
 	if err != nil {
 		h.writeServiceError(c, "accountUpdateFailed", err, http.StatusInternalServerError, "更新账号失败")
 		return
 	}
-	response.Success(c, http.StatusOK, newAccountResponse(value))
+	result := newAccountResponse(value)
+	if request.BuildSuperEntitled != nil {
+		if synchronizer, ok := h.sync.(accountModelSynchronizer); ok {
+			result.ModelSyncFailed = synchronizer.SyncModels(c.Request.Context(), id) != nil
+		}
+	}
+	response.Success(c, http.StatusOK, result)
 }
 
 func (h *Handler) delete(c *gin.Context) {
@@ -1005,6 +1033,10 @@ func (h *Handler) refreshAllConsoleQuotas(c *gin.Context) {
 
 func newAccountResponse(value accountapp.View) accountResponse {
 	c := value.Credential
+	buildRouteMode := c.BuildRouteMode
+	if c.Provider != accountdomain.ProviderBuild || !buildRouteMode.IsValid() {
+		buildRouteMode = accountdomain.BuildRouteAuto
+	}
 	result := accountResponse{
 		ID: c.ID, Provider: string(c.Provider), AuthType: string(c.AuthType), WebTier: string(c.WebTier),
 		WebTierSyncedAt: c.WebTierSyncedAt, Name: c.Name, Email: c.Email, UserID: c.UserID, TeamID: c.TeamID,
@@ -1015,7 +1047,11 @@ func newAccountResponse(value accountapp.View) accountResponse {
 		FailureCount: c.FailureCount, CooldownUntil: c.CooldownUntil, LastError: c.LastError,
 		LastUsedAt: c.LastUsedAt, LinkedAccountID: c.LinkedAccountID, LinkedName: c.LinkedAccountName, LinkedProvider: string(c.LinkedProvider),
 		CreatedAt: c.CreatedAt, ObservedModel: c.ObservedModel, ObservedModelAt: c.ObservedModelAt,
-		Quota: newQuotaResponse(value.Quota), QuotaWindows: make([]quotaWindowResponse, 0, len(value.QuotaWindows)),
+		CloudflareCookieConfigured: c.EncryptedCloudflareCookie != "",
+		BuildSuperEntitled:         c.BuildSuperEntitled && c.Provider == accountdomain.ProviderBuild,
+		BuildRouteMode:             string(buildRouteMode),
+		BuildBotFlagged:            value.BuildBotFlagged && c.Provider == accountdomain.ProviderBuild,
+		Quota:                      newQuotaResponse(value.Quota), QuotaWindows: make([]quotaWindowResponse, 0, len(value.QuotaWindows)),
 	}
 	for _, window := range value.QuotaWindows {
 		breakdown := make([]quotaBreakdownResponse, 0, len(window.Breakdown))
@@ -1047,9 +1083,13 @@ func newQuotaResponse(value accountapp.QuotaView) quotaResponse {
 func newBillingResponse(value accountdomain.Billing) billingResponse {
 	history := make([]billingHistoryResponse, 0, len(value.History))
 	for _, entry := range value.History {
-		history = append(history, billingHistoryResponse{Year: entry.Year, Month: entry.Month, IncludedUsed: entry.IncludedUsed, OnDemandUsed: entry.OnDemandUsed, TotalUsed: entry.TotalUsed})
+		history = append(history, billingHistoryResponse{
+			Year: entry.Year, Month: entry.Month,
+			PeriodType: entry.PeriodType, PeriodStart: entry.PeriodStart, PeriodEnd: entry.PeriodEnd,
+			IncludedUsed: entry.IncludedUsed, OnDemandUsed: entry.OnDemandUsed, TotalUsed: entry.TotalUsed,
+		})
 	}
-	return billingResponse{PlanCode: value.PlanCode, PlanName: value.PlanName, MonthlyLimit: value.MonthlyLimit, Used: value.Used, Remaining: value.Remaining(), OnDemandCap: value.OnDemandCap, OnDemandUsed: value.OnDemandUsed, PrepaidBalance: value.PrepaidBalance, CreditUsagePercent: value.CreditUsagePercent, IsUnifiedBillingUser: value.IsUnifiedBillingUser, TopUpMethod: value.TopUpMethod, UsagePeriodType: value.UsagePeriodType, UsagePeriodStart: value.UsagePeriodStart, UsagePeriodEnd: value.UsagePeriodEnd, BillingPeriodStart: value.BillingPeriodStart, BillingPeriodEnd: value.BillingPeriodEnd, History: history, SyncedAt: value.SyncedAt}
+	return billingResponse{PlanCode: value.PlanCode, PlanName: value.PlanName, MonthlyLimit: value.MonthlyLimit, Used: value.Used, Remaining: value.Remaining(), OnDemandCap: value.OnDemandCap, OnDemandUsed: value.OnDemandUsed, PrepaidBalance: value.PrepaidBalance, CreditUsagePercent: value.CreditUsagePercent, IsUnifiedBillingUser: value.IsUnifiedBillingUser, OnDemandEnabled: value.OnDemandEnabled, TopUpMethod: value.TopUpMethod, UsagePeriodType: value.UsagePeriodType, UsagePeriodStart: value.UsagePeriodStart, UsagePeriodEnd: value.UsagePeriodEnd, BillingPeriodStart: value.BillingPeriodStart, BillingPeriodEnd: value.BillingPeriodEnd, History: history, SyncedAt: value.SyncedAt}
 }
 
 func pagination(c *gin.Context) (int, int) {
