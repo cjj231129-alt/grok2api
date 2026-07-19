@@ -1,14 +1,14 @@
 # Render Blueprint for grok2api
 # https://render.com/docs/blueprint-spec
 #
-# 使用前：
+# 使用步骤：
 # 1. 把此文件放到你的 grok2api fork 仓库根目录
 # 2. 准备好填了真实敏感值的 config.yaml（参考 config.example.yaml）
-# 3. 在 Render Dashboard 创建 Blueprint，指定此仓库
-# 4. Render 创建服务后，手动在 Environment → Secret Files 中添加：
+# 3. Render Dashboard → Blueprints → New Blueprint → 连接仓库
+# 4. 创建完服务后，Environment → Secret Files → 添加：
 #    - Filename: config.yaml
 #    - Contents: 粘贴你完整的 config.yaml 内容
-#    - Mount path: /run/grok2api
+#    （不要填 Mount path，Render 固定写入 /etc/secrets/<filename>）
 
 services:
   - type: web
@@ -22,19 +22,21 @@ services:
     healthCheckPath: /healthz
     port: 8000
 
-    # Secret File 自动注入 /run/grok2api/config.yaml
-    # entrypoint.sh 检测到后将其 cp 至 /app/config.yaml
+    # Secret File 内容写入 /etc/secrets/config.yaml
+    # 通过环境变量告诉 entrypoint.sh 去那里取
     secretFiles:
-      - name: config
-        mountPath: /run/grok2api
+      - name: config.yaml
 
-    # SQLite 数据库必须持久化，否则重启丢全部账号与数据
+    # 必须覆盖 GROK2API_CONFIG_SOURCE，默认 /run/grok2api/config.yaml
+    # 改指向 Render Secret File 实际路径
+    envVars:
+      - key: GROK2API_CONFIG_SOURCE
+        value: /etc/secrets/config.yaml
+      - key: TZ
+        value: Asia/Shanghai
+
+    # SQLite 数据库持久化，免费套餐 1 GB 够用
     disk:
       name: grok2api-data
       mountPath: /app/data
       sizeGB: 1
-
-    # 可选的运行时环境变量
-    envVars:
-      - key: TZ
-        value: Asia/Shanghai
